@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 
 import socket    # Basic TCP/IP communication on the internet
 import _thread   # Response computation runs concurrently with main program
+import os
 
 
 def listen(portnum):
@@ -60,14 +61,6 @@ def serve(sock, func):
 
 
 ##
-# Starter version only serves cat pictures. In fact, only a
-# particular cat picture.  This one.
-##
-CAT = """
-     ^ ^
-   =(   )=
-"""
-
 # HTTP response codes, as the strings we will actually send.
 # See:  https://en.wikipedia.org/wiki/List_of_HTTP_status_codes
 # or    http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
@@ -79,28 +72,38 @@ STATUS_NOT_IMPLEMENTED = "HTTP/1.0 401 Not Implemented\n\n"
 
 
 def respond(sock):
-    """
-    This server responds only to GET requests (not PUT, POST, or UPDATE).
-    Any valid GET request is answered with an ascii graphic of a cat.
-    """
-    sent = 0
-    request = sock.recv(1024)  # We accept only short requests
-    request = str(request, encoding='utf-8', errors='strict')
-    log.info("--- Received request ----")
-    log.info("Request was {}\n***\n".format(request))
-
+    # Read the request and split it into words.
+    request = sock.recv(1024).decode("utf-8")
     parts = request.split()
-    if len(parts) > 1 and parts[0] == "GET":
-        transmit(STATUS_OK, sock)
-        transmit(CAT, sock)
-    else:
-        log.info("Unhandled request: {}".format(request))
-        transmit(STATUS_NOT_IMPLEMENTED, sock)
-        transmit("\nI don't handle this request: {}\n".format(request), sock)
 
-    sock.shutdown(socket.SHUT_RDWR)
+    # A GET request has a path in the second word.
+    if len(parts) > 1 and parts[0] == "GET":
+        path = parts[1]
+        # Remove the first slash so it can be added to the pages folder.
+        filename = path[1:] if path.startswith("/") else path
+
+        # These path names are not allowed.
+        if path.startswith("//") or filename.startswith(("~", "..")):
+            sock.send(STATUS_FORBIDDEN.encode("utf-8"))
+        # Only HTML and CSS files are served.
+        elif not filename.endswith((".html", ".css")):
+            sock.send(STATUS_NOT_FOUND.encode("utf-8"))
+        else:
+            # Look for the requested file in the pages folder.
+            filepath = "./pages/" + filename
+            if not os.path.exists(filepath):
+                sock.send(STATUS_NOT_FOUND.encode("utf-8"))
+            else:
+                # Send the success status and then the file contents.
+                sock.send(STATUS_OK.encode("utf-8"))
+                with open(filepath, "r") as page:
+                    sock.send(page.read().encode("utf-8"))
+    else:
+        # This server does not handle other request methods.
+        sock.send(STATUS_NOT_IMPLEMENTED.encode("utf-8"))
+
+    # Close the connection when the response is done.
     sock.close()
-    return
 
 
 def transmit(msg, sock):
